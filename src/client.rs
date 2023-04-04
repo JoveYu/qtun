@@ -9,6 +9,7 @@ use log::{error, info};
 use quinn::ConnectionError;
 use quinn::Endpoint;
 use structopt::{self, StructOpt};
+use rand::Rng;
 
 use env_logger::Builder;
 use log::LevelFilter;
@@ -28,6 +29,9 @@ struct Opt {
     /// Override hostname used for certificate verification
     #[structopt(long = "host", default_value = "bing.com")]
     host: String,
+    /// remote port range
+    #[structopt(long = "port_range", default_value = "1")]
+    port_range: u16,
 }
 
 #[tokio::main]
@@ -45,6 +49,7 @@ async fn main() -> Result<()> {
     let mut listen_addr = options.listen;
     let mut relay_addr = options.relay;
     let mut host = options.host;
+    let mut port_range = options.port_range;
 
     // parse environment variables
     if let Ok((ss_local_addr, ss_remote_addr)) = args::parse_env_addr() {
@@ -55,6 +60,9 @@ async fn main() -> Result<()> {
     if let Ok(ss_plugin_opts) = args::parse_env_opts() {
         if let Some(h) = ss_plugin_opts.get("host") {
             host = h.clone();
+        }
+        if let Some(h) = ss_plugin_opts.get("port_range") {
+            port_range = h.parse()?;
         }
     }
 
@@ -95,10 +103,14 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(listen_addr).await?;
 
-    while let Ok((inbound, _)) = listener.accept().await {
-        info!("connection incoming");
+    let port_start = remote.port();
 
-        let remote = Arc::clone(&remote);
+    while let Ok((inbound, _)) = listener.accept().await {
+        // info!("connection incoming");
+
+        let remote_port = port_start + rand::thread_rng().gen_range(0..port_range);
+        // info!("remote port {}", remote_port);
+        let remote = Arc::new(SocketAddr::new(remote.ip(), remote_port));
         let host = Arc::clone(&host);
         let endpoint = Arc::clone(&endpoint);
 
