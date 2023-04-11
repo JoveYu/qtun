@@ -2,11 +2,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{timeout, Duration};
 
 use anyhow::{anyhow, Result};
 use futures::future::try_join;
-use log::{error, info};
-use quinn::ConnectionError;
+use log::{info};
 use quinn::Endpoint;
 use structopt::{self, StructOpt};
 use rand::Rng;
@@ -128,33 +128,14 @@ async fn transfer(
     endpoint: Arc<Endpoint>,
     mut inbound: TcpStream,
 ) -> Result<()> {
-    let new_conn = endpoint
-        .connect(*remote, &host)?
+    let dur = Duration::from_secs(1); // TODO
+    let new_conn = timeout(dur, endpoint
+        .connect(*remote, &host)?)
         .await
-        .map_err(|e| {
-            if e == ConnectionError::TimedOut {
-                let socket = if cfg!(target_os = "windows") {
-                    std::net::UdpSocket::bind("0.0.0.0:0").unwrap()
-                } else {
-                    std::net::UdpSocket::bind("[::]:0").unwrap()
-                };
-                let addr = socket.local_addr().unwrap();
-                let ret = endpoint.rebind(socket);
-                match ret {
-                    Ok(_) => {
-                        info!("rebinding to: {}", addr);
-                    }
-                    Err(e) => {
-                        error!("rebind fail: {:?}", e);
-                    }
-                }
-            }
-            anyhow!("failed to connect: {:?}", e)
-        })
-        .unwrap();
+        .map_err(|e| anyhow!("failed to connect: {:?}", e))?;
 
     let (mut ri, mut wi) = inbound.split();
-    let (mut wo, mut ro) = new_conn
+    let (mut wo, mut ro) = new_conn?
         .open_bi()
         .await
         .map_err(|e| anyhow!("failed to open stream: {:?}", e))?;
