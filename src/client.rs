@@ -6,7 +6,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use anyhow::{anyhow, Result};
 use futures::future::try_join;
-use log::{error, info};
+use log::{error, info, debug};
 use quinn::ConnectionError;
 use quinn::Endpoint;
 use structopt::{self, StructOpt};
@@ -29,6 +29,9 @@ struct Opt {
     /// Override hostname used for certificate verification
     #[structopt(long = "host", default_value = "bing.com")]
     host: String,
+    /// Port range for random port
+    #[structopt(long = "port_range", default_value = "1000")]
+    port_range: u16,
 }
 
 #[tokio::main]
@@ -46,6 +49,7 @@ async fn main() -> Result<()> {
     let mut listen_addr = options.listen;
     let mut relay_addr = options.relay;
     let mut host = options.host;
+    let mut port_range = options.port_range;
 
     // parse environment variables
     if let Ok((ss_local_addr, ss_remote_addr)) = args::parse_env_addr() {
@@ -56,6 +60,11 @@ async fn main() -> Result<()> {
     if let Ok(ss_plugin_opts) = args::parse_env_opts() {
         if let Some(h) = ss_plugin_opts.get("host") {
             host = h.clone();
+        }
+        if let Some(pr) = ss_plugin_opts.get("port_range") {
+            if let Ok(pr) = pr.parse::<u16>() {
+                port_range = pr;
+            }
         }
     }
 
@@ -84,7 +93,6 @@ async fn main() -> Result<()> {
 
     endpoint.set_default_client_config(client_config);
 
-    let remote = Arc::<SocketAddr>::from(relay_addr);
     let host = Arc::<String>::from(host);
     let endpoint = Arc::<Endpoint>::from(endpoint);
 
@@ -93,12 +101,19 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
 
     while let Ok((inbound, _)) = listener.accept().await {
-        info!("connection incoming");
+        debug!("connection incoming: {:?}", inbound);
 
-        let remote = Arc::clone(&remote);
+
+        let base_port = relay_addr.port();
+        let max_port = base_port + port_range;
+        let random_port = rand::random_range(base_port..=max_port);
+        let random_addr = SocketAddr::new(relay_addr.ip(), random_port);
+        let remote = Arc::new(random_addr);
+
         let host = Arc::clone(&host);
         let endpoint = Arc::clone(&endpoint);
 
+        debug!("connect remote: {}", random_addr);
         let transfer = transfer(remote, host, endpoint, inbound);
         tokio::spawn(transfer);
     }
@@ -116,6 +131,7 @@ async fn transfer(
         .connect(*remote, &host)?
         .await
         .map_err(|e| {
+            error!("connect to {} failed: {:?}", remote, e);
             if e == ConnectionError::TimedOut {
                 let socket = if cfg!(target_os = "windows") {
                     std::net::UdpSocket::bind("0.0.0.0:0").unwrap()
@@ -134,8 +150,8 @@ async fn transfer(
                 }
             }
             anyhow!("failed to connect: {:?}", e)
-        })
-        .unwrap();
+        })?
+        ;
 
     let (mut ri, mut wi) = inbound.split();
     let (mut wo, mut ro) = new_conn
