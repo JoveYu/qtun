@@ -151,7 +151,7 @@ async fn transfer(
 
     try_join(client_to_server, server_to_client).await?;
 
-    inbound.shutdown().await.ok(); // 关闭 TCP
+    drop(inbound); // 通用关闭 TCP 连接，跨平台有效
     new_conn.close(0u32.into(), b"done"); // 关闭 QUIC
 
     Ok(())
