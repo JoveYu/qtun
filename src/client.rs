@@ -133,21 +133,8 @@ async fn transfer(
         .map_err(|e| {
             error!("connect to {} failed: {:?}", remote, e);
             if e == ConnectionError::TimedOut {
-                let socket = if cfg!(target_os = "windows") {
-                    std::net::UdpSocket::bind("0.0.0.0:0").unwrap()
-                } else {
-                    std::net::UdpSocket::bind("[::]:0").unwrap()
-                };
-                let addr = socket.local_addr().unwrap();
-                let ret = endpoint.rebind(socket);
-                match ret {
-                    Ok(_) => {
-                        info!("rebinding to: {}", addr);
-                    }
-                    Err(e) => {
-                        error!("rebind fail: {:?}", e);
-                    }
-                }
+                // 不再 rebind，直接返回错误
+                return anyhow!("connect timed out: {:?}", e);
             }
             anyhow!("failed to connect: {:?}", e)
         })?
@@ -163,6 +150,9 @@ async fn transfer(
     let server_to_client = tokio::io::copy(&mut ro, &mut wi);
 
     try_join(client_to_server, server_to_client).await?;
+
+    inbound.shutdown().await.ok(); // 关闭 TCP
+    new_conn.close(0u32.into(), b"done"); // 关闭 QUIC
 
     Ok(())
 }
